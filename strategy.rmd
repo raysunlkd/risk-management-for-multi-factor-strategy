@@ -1,0 +1,496 @@
+---
+title: "Project2"
+author: "LeiSun"
+date: "2020/4/29"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+setwd('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2')
+library(MASS)
+library(data.table)
+```
+
+## Step1: 
+Prepare the factor return data
+```{r}
+
+load('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_fac.rda')
+setorder(Rtn_fac,Date)
+head(Rtn_fac)
+dim(Rtn_fac)
+```
+```{r}
+#write.csv(Rtn_fac,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_fac.csv",row.names = T)
+```
+
+
+##Step2: 
+Factor orthogonalization & Factor covariance matrix F
+```{r}
+.rmRegress<-function(old.factors, new.factors){
+  Givn=ginv(old.factors)
+  fit3=Givn%*%new.factors
+  
+  resids=new.factors-old.factors%*%fit3
+  factors=cbind(old.factors,resids)
+  
+  list(factors=factors,betas=fit3)
+}
+
+BM='benchmark'
+Sct = c('金融行业','房地产', '综合行业', '电力行业', '机械行业', '有色金属', '农林牧渔', '电子信息', '酒店旅游', '家电行业', '传媒娱乐', '汽车制造', '发电设备', '水泥行业', '商业百货', '电子器件', '生物制药', '农药化肥', '酿酒行业', '环保行业', '化工行业', '钢铁行业', '化纤行业', '煤炭行业', '飞机制造', '建筑建材', '食品行业', '次新股', 'NaN', '仪器仪表', '服装鞋类', '家具行业', '交通运输', '其它行业', '印刷包装', '船舶制造', '医疗器械', '石油行业', '物资外贸', '塑料制品', '玻璃行业', '公路桥梁', '电器行业', '开发区', '供水供气')
+Style=c('MOM','vol_volatility_1m','volatility_1m','pe','circ_mv','dv_ratio')
+Macro=c('shibor_1m', 'shibor_6m', 'libor_1m', 'libor_6m','shibor_lpr_1y')
+
+tempF=.rmRegress(old.factors = as.matrix(cbind(rep(1,60),Rtn_fac[,BM,with=F])),new.factors=as.matrix(Rtn_fac[,Sct,with=F]))
+tempF=.rmRegress(old.factors = as.matrix(tempF$factors),new.factors = as.matrix(Rtn_fac[,Style,with=F]))
+tempF=.rmRegress(old.factors = as.matrix(tempF$factors),new.factors = as.matrix(Rtn_fac[,Macro,with=F]))
+Rtn_fac_orth=copy(tempF$factors[,-1])
+head(Rtn_fac_orth)
+F_matrix=var(Rtn_fac_orth)
+
+```
+```{r}
+#write.csv(Rtn_fac_orth,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_fac_orth.csv",row.names = T)
+
+```
+
+```{r}
+write.csv(F_matrix,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\F_matrix.csv",row.names = T)
+```
+
+
+##Step3: 
+Prepare the Stock return data
+```{r}
+Rtn_stk=read.csv("F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_stk.csv",
+                 header = TRUE, fileEncoding  =  "UTF-8")
+Rtn_stk=data.table(Rtn_stk)
+Rtn_stk[,Date:=Rtn_stk$trade_date]
+Rtn_stk=Rtn_stk[,Ticker:=substring(Rtn_stk$Ticker,1,6)]
+Rtn_stk=Rtn_stk[,c('Date','Ticker','Sct','Return')]
+Rtn_stk[,MTH:=paste0(year(Date),month(Date))]
+#load('Sector.rda')
+#Sector[,Ticker:=substring(Ticker,1,6)]
+#Rtn_stk=merge(Rtn_stk,Sector,by='Ticker',all.x=TRUE)
+#Rtn_stk[Rtn_stk$Sct=='NaN',Sct:='Others']
+Rtn_stk
+```
+
+
+##Step4: 
+Impute the missing stock returns
+```{r}
+load('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_fac.rda')
+Rtn_fac[,Others:=Rtn_fac[,'NaN']]
+Rtn_fac=Rtn_fac[,-2]
+Rtn_fac = melt(Rtn_fac,id.vars = 'Date')
+Rtn_fac[,MTH:=paste0(year(Date),month(Date))]
+remove=c('2019-02-28')
+Rtn_stk=Rtn_stk[!Date %in% remove,]
+setkey(Rtn_stk,Sct,MTH)
+setkey(Rtn_fac,variable,MTH)
+Rtn_stk=Rtn_fac[Rtn_stk]
+Rtn_stk[is.na(Return),Return:=value]
+Rtn_stk
+Rtn_stk=dcast(Rtn_stk,Date~Ticker,value.var = 'Return')
+
+```
+
+##Step5: 
+Calculate stock beta against factors: B, where $r_t=Bf_t+\theta_t$
+```{r}
+reg = .rmRegress(old.factors = as.matrix(Rtn_fac_orth),new.factors = as.matrix(Rtn_stk[,-1,with=F]))
+B=t(reg$betas)
+rownames(B)=paste(rownames(B),'CH',sep='.')
+colnames(B)=colnames(Rtn_fac_orth)
+head(B)
+
+```
+
+##Step6:
+Caculate idiosyncratic variance matrix: D
+```{r}
+K=1+length(Sct)+length(Style)+length(Macro)
+D=diag(as.numeric(apply(reg$factors[,-(1:K)],2, function(x) sum(x^2)/(60-K))))
+head(D)
+```
+##Step7:
+Calculate factor loading: $u=B^Tw$
+```{r}
+Weight=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Weight.csv')
+Weight=data.table(Weight)
+Weight=Weight[,c('symbol','Wgt_Port','Wgt_BM','Wgt_Act')]
+w=cbind(Weight$Wgt_BM,Weight$Wgt_Port,Weight$Wgt_Act)
+B=as.data.frame(B)
+B[is.na(B)] <- 0
+B=as.matrix(B)
+u=t(B)%*%w
+u
+  
+```
+
+
+```{r}
+#write.csv(u,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\data_loading.csv",row.names = T)
+```
+
+##Step8:
+Total risk attribution
+1)
+```{r}
+Weight=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Weight.csv')
+Weight=data.table(Weight)
+Weight=Weight[,c('symbol','Wgt_Port','Wgt_BM','Wgt_Act')]
+D=as.data.frame(D)
+D[is.na(D)] <- 0
+D=as.matrix(D)
+w=as.matrix(Weight$Wgt_Port)
+TV_Sys=as.numeric(t(w)%*%B%*%F_matrix%*%t(B)%*%w)*12
+TV_Spe=t(w)%*%D%*%w*12
+TR=as.numeric(sqrt(TV_Sys+TV_Spe))
+TV_Sys
+TV_Spe
+TR
+
+
+```
+2)
+```{r}
+TV_BM=as.numeric(t(w)%*%B[,BM]%*%F_matrix[BM,BM]%*%t(B[,BM])%*%w)*12
+TV_Sct=as.numeric(t(w)%*%B[,Sct]%*%F_matrix[Sct,Sct]%*%t(B[,Sct])%*%w)*12
+TV_Sty=as.numeric(t(w)%*%B[,Style]%*%F_matrix[Style,Style]%*%t(B[,Style])%*%w)*12
+TV_Mac=as.numeric(t(w)%*%B[,Macro]%*%F_matrix[Macro,Macro]%*%t(B[,Macro])%*%w)*12
+TV_BM
+TV_Sct
+TV_Sty
+TV_Mac
+TV_BM+TV_Sct+TV_Sty+TV_Mac-TV_Sys
+```
+3)
+```{r}
+Factors=c(BM,Sct,Style,Macro)
+TV=sapply(Factors,function(fac){
+  f=matrix(0,ncol=ncol(F_matrix),nrow = nrow(F_matrix))
+  f[which(fac==Factors),]=F_matrix[which(fac==Factors),]
+  as.numeric(t(w)%*%B%*%f%*%t(B)%*%w)*12
+})
+TV
+sum(TV[Sct])-TV_Sct
+sum(TV[Style])-TV_Sty
+sum(TV[Macro])-TV_Mac
+
+
+
+```
+```{r}
+#write.csv(TV,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Total_risk_attribution.csv",row.names = T)
+```
+
+4)
+```{r}
+V=(B%*%F_matrix%*%t(B)+D)*12
+MCTR=V%*%w/TR
+head(MCTR)
+sum(w*MCTR)-TR
+```
+```{r}
+#write.csv(MCTR,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\MCTR.csv",row.names = T)
+```
+
+
+##Step9:
+Tracking error attribution
+1)
+```{r}
+w=as.matrix(Weight$Wgt_Act)
+ActV_Sys=as.numeric(t(w)%*%B%*%F_matrix%*%t(B)%*%w)*12
+ActV_Spe=t(w)%*%D%*%w*12
+TE=as.numeric(sqrt(ActV_Sys+ActV_Spe))
+ActV_Sys
+ActV_Spe
+TE
+
+
+```
+2)
+```{r}
+ActV_BM=as.numeric(t(w)%*%B[,BM]%*%F_matrix[BM,BM]%*%t(B[,BM])%*%w)*12
+ActV_Sct=as.numeric(t(w)%*%B[,Sct]%*%F_matrix[Sct,Sct]%*%t(B[,Sct])%*%w)*12
+ActV_Sty=as.numeric(t(w)%*%B[,Style]%*%F_matrix[Style,Style]%*%t(B[,Style])%*%w)*12
+ActV_Mac=as.numeric(t(w)%*%B[,Macro]%*%F_matrix[Macro,Macro]%*%t(B[,Macro])%*%w)*12
+ActV_BM
+ActV_Sct
+ActV_Sty
+ActV_Mac
+ActV_BM+ActV_Sct+ActV_Sty+ActV_Mac-ActV_Sys
+```
+3)
+```{r}
+Factors=c(BM,Sct,Style,Macro)
+ActV=sapply(Factors,function(fac){
+  f=matrix(0,ncol=ncol(F_matrix),nrow = nrow(F_matrix))
+  f[which(fac==Factors),]=F_matrix[which(fac==Factors),]
+  as.numeric(t(w)%*%B%*%f%*%t(B)%*%w)*12
+})
+ActV
+sum(ActV[Sct])-ActV_Sct
+sum(ActV[Style])-ActV_Sty
+sum(ActV[Macro])-ActV_Mac
+```
+```{r}
+#write.csv(ActV,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Tracking_error_attribution.csv",row.names = T)
+```
+
+4)
+```{r}
+MCAR=V%*%w/TE
+head(MCAR)
+sum(w*MCAR)-TE
+```
+```{r}
+#write.csv(MCAR,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\MATR.csv",row.names = T)
+```
+
+## PCA
+```{r}
+Rtn_stk2=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Rtn_stk2.csv')
+Rtn_stk2=data.table(Rtn_stk2)
+
+Rtn_stk2[,length(unique(Ticker))]
+Rtn_stk2=dcast(Rtn_stk2,Date~Ticker,value.var = 'Return_m')
+
+Rtn_stk2
+```
+
+```{r}
+Rtn_stk2[is.na(Rtn_stk2)] <- 0
+V=cov(Rtn_stk2[,-1,with=F])
+E=eigen(V)
+sqrt(E$values)
+
+```
+```{r}
+aa=sqrt(E$values)
+#write.csv(aa,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\PCA.csv",row.names = T)
+
+```
+
+
+
+
+
+
+
+##Step10:
+Lower the tracking error
+reduce the exposure in sectors '电子器件' & '传媒娱乐'
+```{r}
+Weight=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Weight.csv')
+Weight=data.table(Weight)
+Weight[,Ticker:=Weight[,symbol]]
+Weight=Weight[,c('Ticker','Wgt_Port','Wgt_BM','Wgt_Act')]
+Weight[,Ticker:=substring(Ticker,1,6)]
+Sector=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Sector.csv',fileEncoding = 'UTF-8')
+Sector=data.table(Sector)
+Sector[,Ticker:=substring(Ticker,1,6)]
+Weight=merge(Weight,Sector,by='Ticker',all.x=TRUE)
+Weight[,Wgt_Port_adj:=Wgt_Port]
+
+Adj1=Weight[Sct=='电子器件', .(sum(Wgt_Port),sum(Wgt_BM))]
+
+Weight[Sct=='电子器件',Wgt_Port_adj:=Wgt_Port*(Adj1$V2+0.1)/Adj1$V1]
+
+Adj2=Weight[Sct=='传媒娱乐', .(sum(Wgt_Port),sum(Wgt_BM))]
+Weight[Sct=='传媒娱乐',Wgt_Port_adj:=Wgt_Port*(Adj2$V2+0.1)/Adj2$V1]
+
+Weight[(Sct!='电子器件')&(Sct!='传媒娱乐'),Wgt_Port_adj:=Wgt_Port_adj/sum(Wgt_Port_adj)*Weight[(Sct=='电子器件')|(Sct=='传媒娱乐'),1-sum(Wgt_Port_adj)]]
+
+Weight[,sum(Wgt_Port_adj-Wgt_BM),by=Sct]
+
+```
+```{r}
+Weight[,Wgt_Act_adj:=Wgt_Port_adj-Wgt_BM]
+w=as.matrix(Weight$Wgt_Act_adj)
+ActV_Sys=as.numeric(t(w)%*%B%*%F_matrix%*%t(B)%*%w)*12
+ActV_Spe=t(w)%*%D%*%w*12
+ActV_Sys
+ActV_Spe
+TE=as.numeric(sqrt(ActV_Sys+ActV_Spe))
+TE
+```
+##Step11:
+Increase stock specific risk
+
+1)Identify the source of the stock specific risk
+```{r}
+StockSpec=apply(reg$factors[,-(1:K)],2,function(x) sum(x^2)/(60-K))
+StockSpec=data.table(Ticker=paste0(names(StockSpec),'.SH'),SSVar=StockSpec)
+StockSpec[is.na(StockSpec)] <- 0
+Weight=read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Weight.csv')
+Weight=data.table(Weight)
+Weight=Weight[,c('symbol','Wgt_Port','Wgt_BM','Wgt_Act')]
+setkey(Weight,symbol)
+setkey(StockSpec,Ticker)
+Weight=StockSpec[Weight]
+Weight[Wgt_Port>0,Rank:=frankv(SSVar,order=-1)]
+setorder(Weight,Rank,na.last = TRUE)
+Weight
+```
+```{r}
+#write.csv(Weight,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\SSVar.csv",row.names = T)
+```
+
+2)Increase the exposure to those stocks
+```{r}
+Weight[,Wgt_Port_adj:=Wgt_Port]
+Weight[Rank<=10,Wgt_Port_adj:=Wgt_Port_adj*2]
+Weight[Rank>10,Wgt_Port_adj:=Wgt_Port_adj/sum(Wgt_Port_adj)*Weight[Rank<=10,1-sum(Wgt_Port_adj)]]
+
+Weight[,Wgt_Act_adj:=Wgt_Port_adj-Wgt_BM]
+w=as.matrix(Weight$Wgt_Act_adj)
+ActV_Sys=as.numeric(t(w)%*%B%*%F_matrix%*%t(B)%*%w)*12
+ActV_Spe=t(w)%*%D%*%w*12
+ActV_Sys
+ActV_Spe
+ActV_Spe/(ActV_Spe+ActV_Sys)
+TE=as.numeric(sqrt(ActV_Sys+ActV_Spe))
+TE
+```
+##Step12:
+Minimum Tracking error portfolio
+objectie function & gradient of it, equality constraint function & gradient of it, 
+```{r}
+ObjFun=function(w){
+  w1=as.matrix(w-Weight$Wgt_BM)
+  as.numeric(t(w1)%*%B%*%F_matrix%*%t(B)%*%w1+t(w1)%*%D%*%w1)
+}
+
+ObjFunGradient = function(w){
+  w1=as.matrix(w-Weight$Wgt_BM)
+  as.numeric(t(w1)%*%B%*%F_matrix%*%t(B)+t(w1)%*%D)*2
+}
+
+Equal=function(w){
+  sum(w)-1
+}
+EqualGradient=function(w){
+  rep(1,length(w))
+}
+
+```
+Initial weights and optimizer
+```{r}
+library(nloptr)
+w0=Weight$Wgt_Port
+opt=nloptr(x0=w0,eval_f=ObjFun,eval_grad_f=ObjFunGradient,
+           eval_g_eq=Equal,eval_jac_g_eq=EqualGradient,
+           lb=rep(0,length(w0)),ub=ifelse(w0==0,0,1),
+           opts=list('algorithm'='NLOPT_LD_SLSQP','xtol_abs'=1.0e-8,'maxeval'=100000000))
+w1=opt$solution
+w1
+```
+```{r}
+#w1=cbind(Weight$Ticker,w1)
+#write.csv(w1,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\MTE.csv",row.names = T)
+```
+
+
+Run the risk breakdown for the mim-TE portfolio
+```{r}
+TECal = function(w){
+  sqrt(as.numeric(t(w)%*%B%*%F_matrix%*%t(B)%*%w+t(w)%*%D%*%w)*12)
+}
+
+
+ActVCal=function(w){
+  sapply(Factors, function(fac){
+    f=matrix(0,ncol=ncol(F_matrix),nrow=nrow(F_matrix))
+    f[which(fac==Factors),]=F_matrix[which(fac==Factors),]
+    as.numeric(t(w)%*%B%*%f%*%t(B)%*%w)*12
+  })
+}
+w=as.matrix(w1-Weight$Wgt_BM)
+TE=TECal(w) 
+TE
+ActV=ActVCal(w)
+ActV
+```
+```{r}
+u_actMTE=t(B)%*%w
+u_MTE=t(B)%*%w1
+u_MinTE=cbind(u_MTE,u_actMTE)
+#write.csv(u_MinTE,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Data_loading_MTE.csv",row.names = T)
+#write.csv(ActV,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\ActV_MTE.csv",row.names = T)
+```
+
+##Step13:
+MVO portfolio
+
+We use the composite score as the alpha for stock
+```{r}
+Alpha=data.table(read.csv('F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Score.csv',header = T))
+Alpha
+
+setkey(Alpha,TICKER)
+setkey(Weight,Ticker)
+Alpha=Alpha[Weight]
+Alpha[is.na(Score),Score:=0]
+```
+
+Optimization setting
+```{r}
+ObjFun = function(w){
+  -sum(Alpha$Score*w)
+}
+
+ObjFunGradient = function(w){
+  -Alpha$Score
+}
+Equal=function(w){
+  sum(w)-1
+}
+EqualGradient = function(w){
+  rep(1,length(w))
+}
+Inequal=function(w){
+  w1=as.matrix(w-Weight$Wgt_BM)
+  as.numeric(t(w1)%*%B%*%F_matrix%*%t(B)%*%w1+t(w1)%*%D%*%w1)-0.01/12
+}
+InequalGradient=function(w){
+  w1=as.matrix(w-Weight$Wgt_BM)
+  as.numeric(t(w1)%*%B%*%F_matrix%*%t(B)+t(w1)%*%D)*2
+}
+w0=Weight$Wgt_Port
+opt=nloptr(x0=w0,eval_f = ObjFun,eval_grad_f = ObjFunGradient,
+           eval_g_eq = Equal, eval_jac_g_eq = EqualGradient,
+           eval_g_ineq = Inequal,eval_jac_g_ineq = InequalGradient,
+           lb=rep(0,length(w0)),ub=ifelse(w0==0,0,1),
+           opts=list('algorithm'='NLOPT_LD_SLSQP','xtol_abs'=1.0e-8,'maxeval'=100000000))
+w1=opt$solution
+w1
+
+```
+
+```{r}
+ww=cbind(Weight[,Ticker],w1)
+ww
+u_MVO1=t(B)%*%w1
+w=w1-Weight$Wgt_BM
+u_actMVO=t(B)%*%w
+u_MVO=cbind(u_MVO1,u_actMVO)
+ActV_MVO=ActVCal(w)
+#write.csv(u_MVO,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\Data_loading_MVO.csv",row.names = T)
+#write.csv(ActV_MVO,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\ActV_MVO.csv",row.names = T)
+#write.csv(ww,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\MVO_weight.csv",row.names = T)
+```
+
+```{r}
+#write.csv(w1,file = "F:\\Courses\\HKUST_Semester_Spring\\MAFS5210\\project2\\data_for_R\\MVO.csv",row.names = F)
+```
+
+
+
+
+
